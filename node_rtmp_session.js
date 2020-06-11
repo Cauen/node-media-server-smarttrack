@@ -92,9 +92,125 @@ const rtmpAddress = "rtmp://smarttrack.ga:1935/app/";
 let token = false;
 let rtcamheight = 0;
 let rtcamwidth = 0;
+const onlineCameras = {}
 
-const RtmpPacket = {
-  create: (fmt = 0, cid = 0) => {
+function isValidToken(token) {
+  const universalAtob = (b64Encoded) => {
+    try {
+      return atob(b64Encoded);
+    } catch (err) {
+      return Buffer.from(b64Encoded, "base64").toString();
+    }
+  };
+
+  if (!token) return false;
+  const [, tokenData] = token.split(".");
+  const tokenJson = universalAtob(tokenData);
+  const tokenObj = JSON.parse(tokenJson);
+  const { exp } = tokenObj;
+  const expiryAhead = new Date(exp * 1000) > new Date();
+  return expiryAhead;
+}
+
+async function refreshTokenIfNeeded() {
+  if (!isValidToken(token)) {
+    //console.log("INVALID TOKEN");
+    const response = await axios.post(
+      serverip+"/authenticate",
+      {
+        username: "admin",
+        password: "password",
+      }
+    );
+    if (response && response.data && response.data.token) {
+      token = response.data.token;
+      //console.log("SUCCESSFULLY AUTHENTICATED: ", token)
+    } else {
+      //console.log("ERROR AT AUTH")
+      //console.log(response)
+    }
+  }
+}
+
+async function deleteCamera(streamPath) {
+  //console.log('STREAMPATH >>' , streamPath)
+  const streamIdentification = streamPath
+  await refreshTokenIfNeeded();
+
+  const config = {
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+  };
+
+  try {
+    const addCameraRes = await axios.delete(
+      serverip+"/camera/"+onlineCameras[streamIdentification],
+      config
+    );
+    delete onlineCameras[streamIdentification]
+    // O retorno do delete está sem nenhum feedback
+
+  } catch (err) {
+  }
+}
+
+async function createCamera({ 
+  address = rtmpAddress,
+  host = "default",
+  cameraCode = "000000",
+  latitude = "1",
+  longitude = "1",
+  source = "unknown",
+  userName,
+  appName,
+}) {
+  const streamIdentification = `/${appName}/${userName}`
+  await refreshTokenIfNeeded();
+
+  const config = {
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+  };
+  
+  const bodyParameters = {
+    "lat": latitude,
+    "lon": longitude,
+    "height": 0.0,
+    "name": userName +"-"+ source,
+    "host": null,
+    "path": address + userName,
+    "port": 80,
+    "widthSize": rtcamwidth,
+    "heightSize": rtcamheight,
+    "cameraType": "FFMPEG",
+    "cameraFunction": "MONITOR",
+    "cameraColor": "COLOR32",
+    "cameraProtocol": null,
+    "cameraMethod": "RTPRTSP",
+    "status": "Running",
+  } 
+  
+  try {
+    const addCameraRes = await axios.post(
+      serverip+"/camera",
+      bodyParameters,
+      config
+    );
+    if (addCameraRes.data) {
+      onlineCameras[streamIdentification] = addCameraRes.data.id;
+    } else {
+    }
+  } catch (err) {
+  }
+    
+}
+  
+  const RtmpPacket = {
+    create: (fmt = 0, cid = 0) => {
     return {
       header: {
         fmt: fmt,
@@ -834,7 +950,7 @@ class NodeRtmpSession {
       this.parserPacket.header.length
     );
     let dataMessage = AMF.decodeAmf0Data(payload);
-    console.log(dataMessage);
+    //console.log(dataMessage);
     switch (dataMessage.cmd) {
       case "@setDataFrame":
         if (dataMessage.dataObj) {
@@ -1111,120 +1227,11 @@ class NodeRtmpSession {
     if (typeof invokeMessage.streamName !== "string") {
       return;
     }
-    console.log("INVOKE .....", invokeMessage)
+    //console.log("INVOKE .....", invokeMessage)
     const userName = invokeMessage.streamName.split("?")[0];
     const appName = this.appname;
     this.publishStreamPath =
       "/" + this.appname + "/" + invokeMessage.streamName.split("?")[0];
-
-    function isValidToken(token) {
-      const universalAtob = (b64Encoded) => {
-        try {
-          return atob(b64Encoded);
-        } catch (err) {
-          return Buffer.from(b64Encoded, "base64").toString();
-        }
-      };
-
-      if (!token) return false;
-      const [, tokenData] = token.split(".");
-      const tokenJson = universalAtob(tokenData);
-      const tokenObj = JSON.parse(tokenJson);
-      const { exp } = tokenObj;
-      const expiryAhead = new Date(exp * 1000) > new Date();
-      return expiryAhead;
-    }
-
-    async function createCamera({ 
-      address = rtmpAddress,
-      host = "default",
-      cameraCode = "000000",
-      latitude = "1",
-      longitude = "1",
-      source = "unknown",
-    }) {
-      if (!isValidToken(token)) {
-        console.log("INVALID TOKEN");
-        const response = await axios.post(
-          serverip+"/authenticate",
-          {
-            username: "admin",
-            password: "password",
-          }
-        );
-        if (response && response.data && response.data.token) {
-          token = response.data.token;
-          console.log("SUCCESSFULLY AUTHENTICATED: ", token)
-        } else {
-          console.log("ERROR AT AUTH")
-          console.log(response)
-        }
-      }
-
-      console.log("TESTING");
-      console.log(rtcamheight, rtcamwidth)
-      console.log("TRYING WITH TOKEN " + token);
-      const config = {
-        headers: {
-          Authorization: `Bearer ${token}`,
-          "Content-Type": "application/json",
-        },
-      };
-      /*
-      const bodyParameters = {
-        lat: latitude,
-        lon: longitude,
-        height: 0.0,
-        name: userName +"-"+ source,
-        port: 80,
-        path: address + userName,
-        widthSize: rtcamwidth,
-        heightSize: rtcamheight,
-        cameraType: "FFMPEG",
-        cameraFunction: "MONITOR",
-        cameraColor: "COLOR32",
-        cameraMethod: "RTPRTSP",
-      };
-      */
-      const bodyParameters = {
-        "lat": latitude,
-        "lon": longitude,
-        "height": 0.0,
-        "name": userName +"-"+ source,
-        "host": null,
-        "path": address + userName,
-        "port": 80,
-        "widthSize": rtcamwidth,
-        "heightSize": rtcamheight,
-        "cameraType": "FFMPEG",
-        "cameraFunction": "MONITOR",
-        "cameraColor": "COLOR32",
-        "cameraProtocol": null,
-        "cameraMethod": "RTPRTSP",
-        "status": "Running",
-      }    
-
-      console.log('SENDING REQUEST WITH DATA');
-      console.log(bodyParameters, config)
-
-      try {
-        const addCameraRes = await axios.post(
-          serverip+"/camera",
-          bodyParameters,
-          config
-        );
-        if (addCameraRes.data) {
-          console.log("CAMERA CREATED")
-          console.log(addCameraRes.data);
-        } else {
-          console.log("ERROR AT CAMERA CREATION")
-          console.log(addCameraRes)
-        }
-      } catch (err) {
-        console.log(err);
-      }
-      
-    }
 
     this.publishArgs = QueryString.parse(
       invokeMessage.streamName.split("?")[1]
@@ -1241,9 +1248,9 @@ class NodeRtmpSession {
     }
 
     // Emanuel in 0.3.0
-    console.log('PUBLISH ARGS ARE!!');
-    console.log(this.publishArgs);
-    createCamera(this.publishArgs);
+    //console.log('PUBLISH ARGS ARE!!');
+    //console.log(this.publishArgs);
+    createCamera({...this.publishArgs, userName, appName});
 
     if (this.config.auth && this.config.auth.publish && !this.isLocal) {
       let results = NodeCoreUtils.verifyAuth(
@@ -1543,8 +1550,9 @@ class NodeRtmpSession {
     if (invokeMessage.streamId == this.publishStreamId) {
       if (this.isPublishing) {
         Logger.log(
-          `[rtmp publish] Close stream. id=${this.id} streamPath=${this.publishStreamPath} streamId=${this.publishStreamId}`
+          `[rtmp publishx] Close stream. id=${this.id} streamPath=${this.publishStreamPath} streamId=${this.publishStreamId}`
         );
+        deleteCamera(this.publishStreamPath)
         context.nodeEvent.emit(
           "donePublish",
           this.id,
